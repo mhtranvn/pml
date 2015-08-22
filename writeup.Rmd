@@ -55,9 +55,10 @@ The resulting data frame consists of 40 columns including outcome (see *Appendix
 ###Train the Model
 ####Model Selection
 For prediction of a factor variable like *classe* in this analysis, the classification tree family is the most suitable since its methods handle categorical and binary features better than logistic regression and SVM. Though these methods are quite computational-intensive, they also give high prediction accuracy.
-To speed up the model selection process, a small random subset of data of about 1000 samples is selected from *training* data. Models are fitted using Random Forest (*rp*), Boosting with Tree(*gbm*) and Tree (*rpart*) methods. The method with the highest accuracy will be selected to train a final model.
+To speed up the model selection process, a small random subset of data of about 2000 samples is selected from *training* data. Models are fitted using Random Forest (*rp*), Boosting with Tree(*gbm*) and Tree (*rpart*) methods. The method with the highest accuracy will be selected to train a final model.
 ```{r, message=F, warning=F, results='hide'}
-sdata <- data[sample(1:nrow(data),1000),]
+set.seed(88)
+sdata <- data[sample(1:nrow(data),2000),]
 sTrain <- createDataPartition(sdata$classe, p=0.75, list=FALSE)
 straining <- sdata[sTrain,]
 stesting <- sdata[-sTrain,]
