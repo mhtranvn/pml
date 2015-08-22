@@ -1,0 +1,126 @@
+---
+title: "Analyse of Weight Lifting Exercise Data and Prediction"
+author: "Tran Manh Hien"
+output:
+  html_document:
+    keep_md: yes
+  pdf_document: default
+  word_document: default
+---
+###Overview
+In this assignment we analyse personal activities' data from [Weight Lifting Exercise Dataset](http://groupware.les.inf.puc-rio.br/har) to predict the manner (to quantify *how well*) the participants do the exercise. The result shows that using the Random Forest method we are able to build a model with quite high accuracy of more than 99%.
+
+###Getting Data and Cleaning
+The data was compiled by a group of scientists Velloso, Bulling, Gellersen, Ugulino and Fuks (credit [here](http://groupware.les.inf.puc-rio.br/work.jsf?p1=11201)). According to the authors, "Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (class *A*)"... and 4 other incorrect fashions (class *B, C, D, E*). Using wearable on-body sensing devices such as *Jawbone Up, Nike FuelBand,* and *Fitbit* the data was collected into *Weight Lifting Exercise Dataset*   
+The data for this analysis comes in 2 files: training data [pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and test data [pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv). We downloaded these files into our working directory and read them into data frames *data* and *pdata* accordingly.
+```{r loadlib, message=F, warning=F}
+set.seed(1)
+library(caret)
+library(doParallel)
+registerDoParallel(core=4)  ## computer-specific
+```
+```{r}
+data <- read.csv(file="pml-training.csv", na.string=c("","NA"))
+pdata <- read.csv(file="pml-testing.csv", na.string=c("","NA"))
+dim(data)
+```
+The training data contains 160 variables. The factor variable *classe* with 5 levels (*"A","B","C","D","E"*) is an outcome of a sample. 
+```{r, fig.height=4, fig.width=5}
+plot(data$classe, main="Distribution of classe in training", ylab="Frequency", xlab="classe")
+```   
+   
+The rest 159 variables are potential predictors of our model. The listing of *data* shows that the data needs extensive cleaning, including:   
+
+* variable with ratio of missing values above some threshold
+* unrelated data
+* highly-correlated variables with correlation coefficient above some threshold   
+
+To remove variables with ratio of missing values above some threshold, the following code will populate a vector of logical values *inc* with a value of *FALSE* for columns with more than 5% NA values, and *TRUE* otherwise.
+```{r}
+inc <- apply(data, 2, function (x) {if (sum(is.na(x))/length(x) <= 0.05) TRUE else FALSE})
+```
+Since the manner of exercise does not depend on row sequence (variable *X*), participant name (*user_name*), timestamp and windows (*raw_timestamp_part_1*, *raw_timestamp_part_2*, *cvtd_timestamp*, *new_window*, *num_window*), these first 7 columns are unrelated data to our analysis and therefore are subject to removal.
+```{r}
+inc[1:7] <- FALSE
+data <- data[,inc]
+```
+In the last step, some of highly-correlated variables with correlation coefficient higher than 0.8 are moved from the resulted data frame using *findCorrelation()* function:
+```{r, results='hide'}
+cortab <- cor(data[,-53])
+exc <- findCorrelation(cortab, cutoff = .80, verbose = TRUE)
+data <- data[,-exc]
+```
+The resulting data frame consists of 40 columns including outcome (see *Appendix 1*)   
+
+###Train the Model
+####Model Selection
+For prediction of a factor variable like *classe* in this analysis, the classification tree family is the most suitable since its methods handle categorical and binary features better than logistic regression and SVM. Though these methods are quite computational-intensive, they also give high prediction accuracy.
+To speed up the model selection process, a small random subset of data of about 1000 samples is selected from *training* data. Models are fitted using Random Forest (*rp*), Boosting with Tree(*gbm*) and Tree (*rpart*) methods. The method with the highest accuracy will be selected to train a final model.
+```{r, message=F, warning=F, results='hide'}
+sdata <- data[sample(1:nrow(data),1000),]
+sTrain <- createDataPartition(sdata$classe, p=0.75, list=FALSE)
+straining <- sdata[sTrain,]
+stesting <- sdata[-sTrain,]
+modFitRF <- train(classe ~ ., model="rf", data = straining) #random forest
+modFitGBM <- train(classe ~ ., model="gbm", data = straining, verbose=FALSE) # boosting with tree
+modFitTR <- train(classe ~ ., model="rpart", data = straining) # tree
+predRF <- predict(modFitRF, stesting)
+predGBM <- predict(modFitGBM, stesting)
+predTR <- predict(modFitTR, stesting)
+```
+The best accuracy is given by Random Tree and Boosting with Tree methods.
+```{r}
+rbind(c(method="rf",confusionMatrix(predRF, stesting$classe)$overall["Accuracy"]),c(method="gbm",confusionMatrix(predGBM, stesting$classe)$overall["Accuracy"]), c(method="tree",confusionMatrix(predTR, stesting$classe)$overall["Accuracy"]))
+```
+
+####Training and Testing data
+To train a model using the Random Forest method the data is split into training set (75%) and testing set. The training data will be used to train the model.
+```{r}
+inTrain <- createDataPartition(data$classe, p=0.75, list=FALSE)
+training <- data[inTrain,]
+testing <- data[-inTrain,]
+```
+####Cross-Validation  
+Along with Boosting the Random Forest is one of the best performing method, but according to Prof Leek care must be taken to avoid overfitting when using it. The goal of cross-validation is to define a data set to "test" the model in the training phase in order to limit overfitting and give an insight on how the model will generalize to test data set ([Wikipedia](https://en.wikipedia.org/wiki/Cross-validation_(statistics)))   
+For this analysis, a K-fold cross-validation will be used. Taking into account the data size (almost 15,000 samples) the number of fold is set to 6 for calculation performance while maintaining an acceptable level of bias. For the *caret* package's *train()* function, cross-validation will be performed when *method* is set to *cv* and the number of folds is specified as *number* in train control function *trainControl()*
+Train the model:
+```{r, message=F, warning=F}
+modFit <- train(classe ~ ., model="rf", trControl=trainControl(method="cv", number=6, allowParallel=TRUE), data = training)
+modFit
+```
+```{r, fig.height=4, fig.width=5}
+plot(modFit, main="Resampling Results (Cross-Validation)")
+```
+
+####Estimate of Out-of-Sample Error and Model Accuracy   
+Out-of-Sample Error is the error rate on a new dataset (sometimes called generation) (Leek, [Coursera](https://class.coursera.org/predmachlearn-031/lecture/19)). It gives more accurate assessment of the fitted model's error since predictors do not perform as well on an independent dataset (testing data set) as they do in the training dataset.
+The relationship between model's Accuracy and its Out-of-Sample Error is
+$$OutOfSampleError = 1 - Accurary$$
+The following code calculates Accuracy of the model on testing data:
+```{r}
+pred <- predict(modFit, testing)
+table(pred, testing$classe)
+accuracy <- confusionMatrix(pred, testing$classe)$overall["Accuracy"]
+accuracy
+```
+And the Out-of-Sample Error for the model `r 1-accuracy` is very small   
+
+###Prediction
+The assignment requires to apply the received machine learning algorithm to the 20 test cases available in the test data *pdata* from *pml-testing.csv*.
+First logical vectors *inc* and *exc* will applied to *pdata* to get a new dataframe with the same columns as in training dataset (except outcome *class* column since it is not required for prediction), then *modFit* model will be used to predict outcomes from *pdata*
+```{r}
+pdata <- read.csv(file="pml-testing.csv", na.string=c("","NA"))
+pdata <- pdata[,inc]
+pdata <- pdata[,-exc]
+predict(modFit, pdata)
+```
+
+--------  
+
+###Appendixes
+***Appendix 1***
+```{r}
+str(data)
+```
+
+
